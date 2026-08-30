@@ -5,6 +5,15 @@ Asisten kesiapan ekspor untuk UMKM Indonesia — menilai kesiapan ekspor lintas 
 **🔴 Demo live:** https://expora-nine.vercel.app
 **🎥 Video demo (5 menit):** https://youtu.be/0snbV1VZoXI
 
+## Submission
+
+| Syarat | Tautan |
+|---|---|
+| Prototype hands-on (deployed) | https://expora-nine.vercel.app |
+| Video demo (≤5 menit) | https://youtu.be/0snbV1VZoXI |
+| Repo kode + README | https://github.com/Candra0x6/Expora (dokumen ini) |
+| Decision note (1 halaman) | [`docs/decision-note.md`](./docs/decision-note.md) |
+
 ---
 
 ## Masalah yang diselesaikan
