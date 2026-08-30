@@ -9,6 +9,7 @@ import { FormError } from "@/components/state-blocks"
 import { Logo } from "@/components/site-header"
 import type { AuthResult, Role } from "@/lib/types"
 
+const DEMO_PASSWORD = "Demo1234!"
 const AKUN_DEMO = [
   { peran: "UMKM", email: "umkm@jalurekspor.id" },
   { peran: "Petugas", email: "petugas@jalurekspor.id" },
@@ -106,20 +107,28 @@ export function AuthMasuk() {
 
         <div className="mt-4 rounded-2xl border border-[#c47743]/25 bg-[#f0e6d7]/60 p-4">
           <p className="flex items-center gap-2 text-xs font-medium text-[#a75128]">
-            <KeyRound className="size-3.5" /> Akun demo
+            <KeyRound className="size-3.5" /> Akun demo — klik untuk isi otomatis
           </p>
-          <div className="mt-3 flex flex-col gap-1.5 text-xs text-[#18251f]/65">
+          <div className="mt-3 flex flex-col gap-2">
             {AKUN_DEMO.map((akun) => (
-              <div key={akun.email} className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[#18251f]/45">{akun.peran}</span>
-                <span className="font-mono text-[11px]">{akun.email}</span>
-              </div>
+              <button
+                key={akun.email}
+                type="button"
+                onClick={() => {
+                  setEmail(akun.email)
+                  setPassword(DEMO_PASSWORD)
+                  setError(null)
+                }}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#a75128]/20 bg-white/50 px-3 py-2 text-left text-xs transition-colors hover:border-[#a75128]/45 hover:bg-white/80"
+              >
+                <span className="text-[#18251f]/60">{akun.peran}</span>
+                <span className="font-mono text-[11px] text-[#18251f]/80">{akun.email}</span>
+              </button>
             ))}
-            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-[#a75128]/15 pt-2">
-              <span className="text-[#18251f]/45">Password</span>
-              <span className="font-mono text-[11px]">Demo1234!</span>
-            </div>
           </div>
+          <p className="mt-2 text-[11px] text-[#18251f]/40">
+            Password akun demo: <span className="font-mono">{DEMO_PASSWORD}</span>
+          </p>
         </div>
 
         <Link href="/" className="mt-6 text-center text-xs text-[#18251f]/40 hover:text-[#18251f]">
