@@ -1,0 +1,424 @@
+// JalurEkspor — skema database
+// Prisma mengelola HANYA schema `public`. Schema `auth` milik Supabase Auth dan
+// tidak pernah dimodelkan di sini. `profile.id` bernilai sama dengan
+// `auth.users.id`; foreign key-nya ditambahkan lewat migrasi SQL manual.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enum
+// ---------------------------------------------------------------------------
+
+enum Role {
+  UMKM
+  PETUGAS
+}
+
+enum CaseStatus {
+  DRAFT
+  MENUNGGU_TINJAUAN
+  MENUNGGU_UMKM
+  ESKALASI
+  RENCANA_TERKIRIM
+  SELESAI
+}
+
+enum DimensionStatus {
+  ready
+  pending
+  working
+  officer
+  blocked
+  idle
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  READY_FOR_REVIEW
+  COMPLETED
+}
+
+enum TaskOwner {
+  UMKM
+  PETUGAS
+  UMKM_DAN_PENDAMPING
+}
+
+enum RecommendationSource {
+  AI
+  OFFICER
+}
+
+enum Confidence {
+  rendah
+  sedang
+  tinggi
+}
+
+enum InfoRequestStatus {
+  TERBUKA
+  DIJAWAB
+}
+
+enum CaseEventType {
+  KASUS_DIBUAT
+  ASSESSMENT_SELESAI
+  DIKIRIM_TINJAUAN
+  DRAFT_AI_DIBUAT
+  CATATAN_PETUGAS
+  INFO_DIMINTA
+  INFO_DIJAWAB
+  REKOMENDASI_DIEDIT
+  KASUS_DIESKALASI
+  RENCANA_DIKIRIM
+  TUGAS_SELESAI
+  BUKTI_DIUNGGAH
+}
+
+// Catatan: `Dimension` ("hs-lartas" mengandung tanda hubung) tidak bisa jadi
+// enum Prisma. Disimpan sebagai String dan divalidasi di lapisan aplikasi.
+
+// ---------------------------------------------------------------------------
+// Identitas
+// ---------------------------------------------------------------------------
+
+model Profile {
+  id          String   @id @db.Uuid
+  role        Role
+  namaLengkap String   @map("nama_lengkap")
+  telepon     String?
+  dibuatPada  DateTime @default(now()) @map("dibuat_pada")
+
+  businesses      Business[]
+  casesDitinjau   Case[]           @relation("CaseReviewer")
+  recommendations Recommendation[]
+  infoRequests    InfoRequest[]
+  infoResponses   InfoResponse[]
+  evidences       Evidence[]
+  officerNotes    OfficerNote[]
+  escalations     Escalation[]
+  caseEvents      CaseEvent[]
+
+  @@map("profile")
+}
+
+model Business {
+  id          String   @id @default(uuid()) @db.Uuid
+  ownerId     String   @map("owner_id") @db.Uuid
+  nama        String
+  bentukLegal String?  @map("bentuk_legal")
+  usiaTahun   Int?     @map("usia_tahun")
+  dibuatPada  DateTime @default(now()) @map("dibuat_pada")
+
+  owner Profile @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  cases Case[]
+
+  @@index([ownerId])
+  @@map("business")
+}
+
+// ---------------------------------------------------------------------------
+// Kasus
+// ---------------------------------------------------------------------------
+
+model Case {
+  id              String     @id @default(uuid()) @db.Uuid
+  kode            String     @unique
+  businessId      String     @map("business_id") @db.Uuid
+  produk          String
+  tujuan          String
+  status          CaseStatus @default(DRAFT)
+  tahap           String     @default("Persiapan dasar")
+  versiAssessment String     @default("v1.0") @map("versi_assessment")
+  targetEkspor    DateTime?  @map("target_ekspor") @db.Date
+  dikirimPada     DateTime?  @map("dikirim_pada")
+  ditinjauOlehId  String?    @map("ditinjau_oleh_id") @db.Uuid
+  ditinjauPada    DateTime?  @map("ditinjau_pada")
+  dibuatPada      DateTime   @default(now()) @map("dibuat_pada")
+  diperbaruiPada  DateTime   @updatedAt @map("diperbarui_pada")
+
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  ditinjauOleh Profile? @relation("CaseReviewer", fields: [ditinjauOlehId], references: [id], onDelete: SetNull)
+
+  answers         AssessmentAnswer[]
+  dimensions      ReadinessDimension[]
+  recommendations Recommendation[]
+  tasks           Task[]
+  infoRequests    InfoRequest[]
+  evidences       Evidence[]
+  officerNotes    OfficerNote[]
+  escalations     Escalation[]
+  events          CaseEvent[]
+
+  @@index([status])
+  @@index([businessId])
+  @@index([kode])
+  @@map("case")
+}
+
+model AssessmentAnswer {
+  id          String   @id @default(uuid()) @db.Uuid
+  caseId      String   @map("case_id") @db.Uuid
+  questionId  String   @map("question_id")
+  dimensi     String
+  nilai       Json
+  aktif       Boolean  @default(true)
+  dijawabPada DateTime @default(now()) @updatedAt @map("dijawab_pada")
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, questionId])
+  @@index([caseId])
+  @@map("assessment_answer")
+}
+
+model ReadinessDimension {
+  id          String          @id @default(uuid()) @db.Uuid
+  caseId      String          @map("case_id") @db.Uuid
+  dimensi     String
+  status      DimensionStatus
+  alasan      String
+  fakta       String[]
+  belumAda    String          @map("belum_ada")
+  dihitungPada DateTime       @default(now()) @map("dihitung_pada")
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, dimensi])
+  @@index([caseId])
+  @@map("readiness_dimension")
+}
+
+// ---------------------------------------------------------------------------
+// Rekomendasi — APPEND ONLY. `PUT .../rekomendasi` menyisipkan baris baru.
+// ---------------------------------------------------------------------------
+
+model Recommendation {
+  id              String               @id @default(uuid()) @db.Uuid
+  caseId          String               @map("case_id") @db.Uuid
+  versi           String
+  sumber          RecommendationSource
+  isi             String
+  ringkasan       String
+  tahap           String
+  tahapPenjelasan String               @map("tahap_penjelasan")
+  keyakinan       Confidence
+  alasanReview    String               @map("alasan_review")
+  alasanPerubahan String?              @map("alasan_perubahan")
+  ringkasanPetugas String?             @map("ringkasan_petugas")
+  dibuatOlehId    String?              @map("dibuat_oleh_id") @db.Uuid
+  dibuatPada      DateTime             @default(now()) @map("dibuat_pada")
+
+  case      Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  dibuatOleh Profile? @relation(fields: [dibuatOlehId], references: [id], onDelete: SetNull)
+
+  fakta          RecFact[]
+  belumDiketahui RecUnknown[]
+  sumberReferensi RecSource[]
+  tasks          Task[]
+
+  @@unique([caseId, versi])
+  @@index([caseId])
+  @@map("recommendation")
+}
+
+model RecFact {
+  id               String  @id @default(uuid()) @db.Uuid
+  recommendationId String  @map("recommendation_id") @db.Uuid
+  label            String
+  nilai            String
+  asal             String
+  dikonfirmasi     Boolean @default(false)
+
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([recommendationId])
+  @@map("rec_fact")
+}
+
+model RecUnknown {
+  id               String   @id @default(uuid()) @db.Uuid
+  recommendationId String   @map("recommendation_id") @db.Uuid
+  teks             String
+  dimensiTerkait   String[] @map("dimensi_terkait")
+
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([recommendationId])
+  @@map("rec_unknown")
+}
+
+model RecSource {
+  id               String  @id @default(uuid()) @db.Uuid
+  recommendationId String  @map("recommendation_id") @db.Uuid
+  judul            String
+  penerbit         String
+  tahun            Int
+  mendukung        String
+  url              String?
+
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@index([recommendationId])
+  @@map("rec_source")
+}
+
+// ---------------------------------------------------------------------------
+// Rencana pendampingan
+// ---------------------------------------------------------------------------
+
+model Task {
+  id               String     @id @default(uuid()) @db.Uuid
+  caseId           String     @map("case_id") @db.Uuid
+  recommendationId String?    @map("recommendation_id") @db.Uuid
+  urutan           Int
+  dimensi          String?
+  judul            String
+  penjelasan       String
+  owner            TaskOwner
+  buktiDibutuhkan  String     @map("bukti_dibutuhkan")
+  targetSelesai    DateTime?  @map("target_selesai") @db.Date
+  status           TaskStatus @default(OPEN)
+  versi            String
+  dibuatPada       DateTime   @default(now()) @map("dibuat_pada")
+  selesaiPada      DateTime?  @map("selesai_pada")
+
+  case           Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  recommendation Recommendation? @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
+  evidences      Evidence[]
+
+  @@index([caseId])
+  @@map("task")
+}
+
+// ---------------------------------------------------------------------------
+// Permintaan informasi (officer-in-the-loop)
+// ---------------------------------------------------------------------------
+
+model InfoRequest {
+  id          String            @id @default(uuid()) @db.Uuid
+  caseId      String            @map("case_id") @db.Uuid
+  officerId   String            @map("officer_id") @db.Uuid
+  dimensi     String?
+  judul       String
+  pesan       String
+  status      InfoRequestStatus @default(TERBUKA)
+  dibuatPada  DateTime          @default(now()) @map("dibuat_pada")
+  dijawabPada DateTime?         @map("dijawab_pada")
+
+  case    Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  officer Profile       @relation(fields: [officerId], references: [id], onDelete: Cascade)
+  jawaban InfoResponse?
+
+  @@index([caseId])
+  @@map("info_request")
+}
+
+model InfoResponse {
+  id         String   @id @default(uuid()) @db.Uuid
+  requestId  String   @unique @map("request_id") @db.Uuid
+  pesan      String
+  olehId     String   @map("oleh_id") @db.Uuid
+  dibuatPada DateTime @default(now()) @map("dibuat_pada")
+
+  request   InfoRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  oleh      Profile     @relation(fields: [olehId], references: [id], onDelete: Cascade)
+  evidences Evidence[]
+
+  @@map("info_response")
+}
+
+// ---------------------------------------------------------------------------
+// Bukti berkas (Supabase Storage, bucket privat `bukti`)
+// ---------------------------------------------------------------------------
+
+model Evidence {
+  id              String   @id @default(uuid()) @db.Uuid
+  caseId          String   @map("case_id") @db.Uuid
+  taskId          String?  @map("task_id") @db.Uuid
+  infoResponseId  String?  @map("info_response_id") @db.Uuid
+  namaBerkas      String   @map("nama_berkas")
+  storagePath     String   @map("storage_path")
+  tipe            String
+  ukuranBytes     Int      @map("ukuran_bytes")
+  dikonfirmasi    Boolean  @default(false)
+  diunggahOlehId  String   @map("diunggah_oleh_id") @db.Uuid
+  diunggahPada    DateTime @default(now()) @map("diunggah_pada")
+
+  case         Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  task         Task?         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  infoResponse InfoResponse? @relation(fields: [infoResponseId], references: [id], onDelete: Cascade)
+  diunggahOleh Profile       @relation(fields: [diunggahOlehId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([taskId])
+  @@index([infoResponseId])
+  @@map("evidence")
+}
+
+// ---------------------------------------------------------------------------
+// Jejak petugas
+// ---------------------------------------------------------------------------
+
+model OfficerNote {
+  id         String   @id @default(uuid()) @db.Uuid
+  caseId     String   @map("case_id") @db.Uuid
+  officerId  String   @map("officer_id") @db.Uuid
+  dimensi    String?
+  isi        String
+  dibuatPada DateTime @default(now()) @map("dibuat_pada")
+
+  case    Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  officer Profile @relation(fields: [officerId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@map("officer_note")
+}
+
+model Escalation {
+  id         String   @id @default(uuid()) @db.Uuid
+  caseId     String   @map("case_id") @db.Uuid
+  officerId  String   @map("officer_id") @db.Uuid
+  kategori   String
+  alasan     String
+  dibuatPada DateTime @default(now()) @map("dibuat_pada")
+
+  case    Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  officer Profile @relation(fields: [officerId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@map("escalation")
+}
+
+// ---------------------------------------------------------------------------
+// Riwayat (PRD #5)
+// ---------------------------------------------------------------------------
+
+model CaseEvent {
+  id         String        @id @default(uuid()) @db.Uuid
+  caseId     String        @map("case_id") @db.Uuid
+  tipe       CaseEventType
+  judul      String
+  aktorId    String?       @map("aktor_id") @db.Uuid
+  aktorLabel String        @map("aktor_label")
+  peranAktor String        @default("SISTEM") @map("peran_aktor")
+  ringkasan  String
+  versi      String?
+  internal   Boolean       @default(false)
+  pada       DateTime      @default(now())
+
+  case  Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  aktor Profile? @relation(fields: [aktorId], references: [id], onDelete: SetNull)
+
+  @@index([caseId, pada])
+  @@map("case_event")
+}
